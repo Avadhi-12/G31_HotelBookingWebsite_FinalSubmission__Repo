@@ -3,11 +3,18 @@ from flask_sqlalchemy import SQLAlchemy
 import os
 from flask_login import LoginManager, UserMixin, login_user, logout_user, login_required, current_user
 from flask_bcrypt import Bcrypt
+from flask_login import current_user
+import requests
+from flask_migrate import Migrate
+
 
 
 
 basedir = os.path.abspath(os.path.dirname(__file__))
 app = Flask(__name__)
+
+
+
 app.secret_key = "your_secret_key"
 
 
@@ -16,6 +23,7 @@ app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 app.config["SECRET_KEY"] = "Your secret key"
 
 db = SQLAlchemy(app)
+migrate = Migrate(app, db)
 bcrypt = Bcrypt(app)
 login_manager = LoginManager()
 login_manager.init_app(app)
@@ -64,27 +72,23 @@ def load_user(user_id):
 with app.app_context():
     db.create_all()
 
+
 @app.route("/")
 def home():
-    hotels = [
-        {"name": "Hotel WK Comfort", "location": "New Delhi, India", "price": 4558, "image": "hotel1.jpg"},
-        {"name": "FabHotel Atithi Residency", "location": "Mumbai, India", "price": 4544, "image": "hotel2.jpg"},
-        {"name": "Virasat Mahal Heritage Hotel", "location": "Jaipur, India", "price": 4664, "image": "hotel3.jpg"},
-        {"name": "Hotel Calabash Luxury Villa", "location": "Delhi Airport, India", "price": 2477, "image": "hotel4.jpg"},
-        {"name": "The Grand Palace", "location": "Bangalore, India", "price": 5999, "image": "hotel5.jpg"},
-        {"name": "Regal Residency", "location": "Chennai, India", "price": 3899, "image": "hotel6.jpg"},
-        {"name": "Ocean View Suites", "location": "Goa, India", "price": 7299, "image": "hotel7.jpg"},
-        {"name": "Mountain Retreat", "location": "Manali, India", "price": 3299, "image": "hotel8.jpg"},
-        {"name": "Luxury Stay Inn", "location": "Kolkata, India", "price": 4899, "image": "hotel9.jpg"},
-        {"name": "Sunrise Hotel", "location": "Pune, India", "price": 4199, "image": "hotel10.jpg"},
-        {"name": "Eiffel Panorama Hotel", "location": "Eiffel Tower", "price": 18000,"image": "hotel3.jpg"},
-        {"name": "Seine River Stay", "location": "Seine River", "price": 12000,"image": "hotel4.jpg"},
-        {"name": "Historic Charm Hotel", "location": "Louvre", "price": 15000, "rating": 5, "reviews": 1300, "image": "hotel5.jpg", "room_type": "Suite"},
-        {"name": "Affordable Paris Stay", "location": "Gare du Nord", "price": 7000, "rating": 3, "reviews": 700, "image": "hotel6.jpg", "room_type": "Standard"},
-        {"name": "Business Class Hotel", "location": "La Défense", "price": 20000, "rating": 4, "reviews": 1000, "image": "hotel7.jpg", "room_type": "Executive"},
-        {"name": "Romantic Getaway", "location": "Champs-Élysées", "price": 22000, "rating": 5, "reviews": 1500, "image": "hotel8.jpg", "room_type": "Suite"}
-    ]
-    return render_template("index.html", hotels=hotels,current_user=current_user)
+    try:
+        # Step 1: Call your own Flask API
+        response = requests.get("http://localhost:5000/hotels")  # Adjust port if needed
+        data = response.json()
+
+        # Step 2: Extract hotel list from response
+        hotels = data.get("hotels", [])
+    except Exception as e:
+        print("Error fetching hotels:", e)
+        hotels = []
+
+    # Step 3: Pass the hotels list to the template
+    return render_template("index.html", hotels=hotels, current_user=current_user)
+
 
 @app.route("/action", methods=["POST"])
 def action():
@@ -100,34 +104,42 @@ def check_login():
 
 @app.route("/filter-hotels", methods=["POST"])
 def filter_hotels():
-    filters = request.json
-    print("Received Filters:", filters)  # Debugging output
+    try:
+        filters = request.json or {}
+        print("Received Filters:", filters)  # Debugging output
 
-    max_price = int(filters["maxPrice"])
-    selected_stars = set(map(int, filters["stars"]))
-    selected_reviews = set(map(int, filters["reviews"]))
-    selected_rooms = set(filters["rooms"])
+        # Extract and convert filters safely
+        max_price = int(filters.get("maxPrice", float("inf")))
 
-    filtered_hotels = [
-        hotel for hotel in hotels
-        if hotel["price"] <= max_price
-        and (not selected_stars or hotel["rating"] in selected_stars)
-        and (not selected_reviews or hotel["rating"] in selected_reviews)
-        and (not selected_rooms or hotel["room_type"] in selected_rooms)
-    ]
+        selected_stars = set(map(int, filters.get("stars", [])))
+        selected_reviews = set(map(int, filters.get("reviews", [])))
+        selected_rooms = set(filters.get("rooms", []))
 
-    # Sorting based on user selection
-    sort_by = filters.get("sortBy", "top_picks")
-    if sort_by == "price_low":
-        filtered_hotels.sort(key=lambda x: x["price"])
-    elif sort_by == "best_rated":
-        filtered_hotels.sort(key=lambda x: (-x["rating"], -x["reviews"]))  # Highest rating first
-    elif sort_by == "nearest":
-        pass  # Implement logic for nearest location if needed
+        # Apply filters
+        filtered_hotels = [
+            hotel for hotel in hotels
+            if hotel["price"] <= max_price
+            and (not selected_stars or hotel["rating"] in selected_stars)
+            and (not selected_reviews or hotel["reviews"] in selected_reviews)
+            and (not selected_rooms or hotel["room_type"] in selected_rooms)
+        ]
 
-    return jsonify({"hotels": filtered_hotels})
+        # Sort the filtered hotels
+        sort_by = filters.get("sortBy", "top_picks")
+        if sort_by == "price_low":
+            filtered_hotels.sort(key=lambda x: x["price"])
+        elif sort_by == "best_rated":
+            filtered_hotels.sort(key=lambda x: (-x["rating"], -x["reviews"]))
+        elif sort_by == "nearest":
+            # Placeholder for nearest logic, if available
+            pass
 
+        return jsonify({"hotels": filtered_hotels})
 
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
+    
+    
 @app.route("/dashboard")
 def dashboard():
     if not current_user.is_authenticated:
@@ -177,7 +189,7 @@ def book_room(room_id):
 
 
 @app.route("/hotels")
-def hotels():
+def get_hotels_data():
     all_hotels = [
         {"name": "Break & Home Paris Italie Porte de Choisy", "location": "Ivry-sur-Seine, Jaipur", "price": 7200, "image": "image1.png", "rating": 7.3, "reviews": 122, "stars": 3, "property_type": "hotel", "room_types": ["single", "double"], "facilities": ["wifi", "parking"],"available_rooms":8},
         {"name": "Le Meurice", "location": "Udaipur", "price": 15000, "image": "image2.png", "rating": 9.0, "reviews": 300, "stars": 5, "property_type": "hotel", "room_types": ["suite", "double"], "facilities": ["wifi", "spa", "parking"],"available_rooms":5},
@@ -360,7 +372,170 @@ def contact():
     return render_template('contact.html')
 
 
+
+@app.route("/add_hotel", methods=["GET", "POST"])
+def add_hotel():
+    if request.method == "POST":
+        name = request.form["name"]
+        location = request.form["location"]
+        description = request.form["description"]
+
+        new_hotel = Hotel(name=name, location=location, description=description)
+        db.session.add(new_hotel)
+        db.session.commit()
+        flash("Hotel added successfully!", "success")
+        return redirect(url_for("home"))
     
+    return render_template("add_hotel.html")
+
+
+
+
+@app.route('/hotels/<int:id>', methods=['PUT'])
+def update_hotel(id):
+    hotel = Hotel.query.get_or_404(id)
+    data = request.get_json()
+    if 'name' in data:
+        hotel.name = data['name']
+    if 'city' in data:
+        hotel.city = data['city']
+    if 'price' in data:
+        hotel.price = data['price']
+    db.session.commit()
+    return jsonify({'message': 'Hotel updated successfully'}), 200
+
+
+
+@app.route("/delete_hotel/<int:hotel_id>", methods=["POST"])
+def delete_hotel(hotel_id):
+    hotel = Hotel.query.get_or_404(hotel_id)
+    db.session.delete(hotel)
+    db.session.commit()
+    flash("Hotel deleted successfully!", "success")
+    return redirect(url_for("home"))
+
+
+
+@app.route("/add_room", methods=["GET", "POST"])
+def add_room():
+    if request.method == "POST":
+        hotel_id = request.form["hotel_id"]
+        room_type = request.form["room_type"]
+        price = request.form["price"]
+        availability = bool(request.form.get("availability"))
+
+        new_room = Room(hotel_id=hotel_id, room_type=room_type, price=price, availability=availability)
+        db.session.add(new_room)
+        db.session.commit()
+        flash("Room added successfully!", "success")
+        return redirect(url_for("home"))
+    
+    hotels = Hotel.query.all()  # Get all hotels to display in a dropdown
+    return render_template("add_room.html", hotels=hotels)
+
+
+
+
+@app.route("/update_room/<int:room_id>", methods=["GET", "POST"])
+def update_room(room_id):
+    room = Room.query.get_or_404(room_id)
+
+    if request.method == "POST":
+        room.room_type = request.form["room_type"]
+        room.price = request.form["price"]
+        room.availability = bool(request.form.get("availability"))
+
+        db.session.commit()
+        flash("Room updated successfully!", "success")
+        return redirect(url_for("home"))
+
+    hotels = Hotel.query.all()  # Get all hotels to display in a dropdown
+    return render_template("update_room.html", room=room, hotels=hotels)
+
+
+
+
+@app.route("/delete_room/<int:room_id>", methods=["POST"])
+def delete_room(room_id):
+    room = Room.query.get_or_404(room_id)
+    db.session.delete(room)
+    db.session.commit()
+    flash("Room deleted successfully!", "success")
+    return redirect(url_for("home"))
+
+
+
+@app.route('/api/users', methods=['POST'])
+def add_user():
+    data = request.get_json()
+    print("🔍 Flask received JSON:", data)  # Debug
+
+    # Make sure all required keys are present
+    required = ['username', 'email', 'password', 'mobile', 'role']
+    missing = set(required) - set(data.keys())
+    if missing:
+        return jsonify({"error": f"Missing field(s): {missing}"}), 400
+
+    try:
+        # Map 'username' ⇒ model.name, drop 'age' (unless you add it to your model)
+        new_user = User(
+            name=data['username'],                # model expects 'name'
+            email=data['email'],
+            mobile=data['mobile'],
+            role=data.get('role', 'user')         # use get() for default
+        )
+        new_user.set_password(data['password'])   # hashes into password_hash
+
+        db.session.add(new_user)
+        db.session.commit()
+
+        return jsonify({"message": "User added successfully"}), 201
+
+    except Exception as e:
+        print("❌ Error creating user:", e)
+        return jsonify({"error": str(e)}), 400
+
+
+
+
+from api.rooms import api as api_blueprint
+app.register_blueprint(api_blueprint)
+
+
+from api.bookings import api as bookings_blueprint
+app.register_blueprint(bookings_blueprint)
+
+from api.hotels import api as hotels_blueprint
+app.register_blueprint(hotels_blueprint)
+
+from api.users import api as users_blueprint
+app.register_blueprint(users_blueprint)
+
+
+
+@app.route('/api/about-us', methods=['GET'])
+def about_us():
+    data = {
+        "title": "Where Every Detail is a Masterpiece",
+        "description": (
+            "BlueWave Hotels is a premier hospitality brand known for comfort and elegance. "
+            "Our goal is to make every guest feel at home while enjoying top-tier service, modern amenities, "
+            "and beautifully designed spaces. Whether you're here for business or leisure, "
+            "we're here to make your stay unforgettable."
+        )
+    }
+    return jsonify(data)
+
+@app.route('/api/team', methods=['GET'])
+def get_team():
+    team_data = [
+        {"name": "Avadhi", "role": "Admin", "image": "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcRd0en53aSgl3-U4J5ukwTCFhP8e2TJrXaJSw&s"},
+        {"name": "Ansh", "role": "Admin", "image": "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcQoJdwFalgenF9tl3xM6xvw6WX5FsIK-vKM1w&s"},
+        {"name": "Aashna", "role": "User", "image": "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcRd0en53aSgl3-U4J5ukwTCFhP8e2TJrXaJSw&s"},
+        {"name": "Bhuvnesh", "role": "User", "image": "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcQoJdwFalgenF9tl3xM6xvw6WX5FsIK-vKM1w&s"},
+    ]
+    return jsonify(team_data)
+
 
 
 if __name__ == "__main__":
